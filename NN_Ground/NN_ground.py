@@ -1,0 +1,915 @@
+import numpy as np
+import sys
+import random
+import NN_Ground.tfim as tfim
+import itertools as it
+import argparse
+import networkx as nx
+import json
+from itertools import groupby
+
+def main(args):
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('xwidth', type=int, help='Width of grid')
+    parser.add_argument('yheight', type=int, help='Height of grid')
+    parser.add_argument('initial_seed', type=int, help='First Jij seed')
+    parser.add_argument('seed_range', type=int, help='Number of seeds')
+    args = parser.parse_args(args)
+
+    PBC = True
+    yheight = args.yheight
+    xwidth = args.xwidth
+    L = [yheight, xwidth]
+    lattice = tfim.Lattice(L, PBC)
+    N = lattice.N
+    basis = tfim.IsingBasis(lattice)
+    initial = args.initial_seed
+    num_seeds = args.seed_range
+    #center = (500,375)
+    center = (0,0)
+    ground_states = {}
+    num_missing = 0
+
+    different = []
+    typecounts = {'pp':0, 'ap':0, 'pa':0, 'aa':0}
+
+
+    f = open("ground_states.txt", "w+")
+    for seed in range(initial, initial + num_seeds):
+        print("\nSeed:", seed)
+        bonds = bond_list(seed, N, PBC, xwidth, yheight)
+
+        Jij = make_Jij(N, bonds, lattice)
+        Jij_type = 'pp'
+        #print(Jij)
+
+        coordList = spinCoords(center, xwidth, yheight)
+
+        plaq = make_plaquettes(PBC, lattice, N, xwidth, yheight)
+
+        f_plaq = frustrated(Jij, plaq)
+        #print(f_plaq)
+
+        if len(f_plaq) == 0:
+            spin_list = []
+            spin_list.append(0)
+            for i in range(1, len(Jij)):
+                if i % xwidth == 0:
+                    bond = Jij[i][i-xwidth]
+                    if bond == 1:
+                        spin = spin_list[-xwidth]
+                    else:
+                        spin = (spin_list[-xwidth] + 1) %2
+                else:
+                    bond = Jij[i][i-1]
+                    if bond == 1:
+                        spin = spin_list[-1]
+                    else:
+                        spin = (spin_list[-1] + 1) %2
+
+                spin_list.append(spin)
+
+            config = 0
+            for i in range(N):
+                if spin_list[i] == 1:
+                    config += 2**i
+
+            ground_config = [config]
+            number_ground_states = len(ground_config)
+
+        else:
+
+            pair_list = plaq_pairing(f_plaq, coordList, PBC, xwidth, yheight)
+            #print("pairs:", pair_list)
+
+            init_ground = initial_ground(pair_list, xwidth, yheight)
+
+            p_pairings = init_ground[0]
+
+            ground_distance = init_ground[1]
+            #print('init_dist:', ground_distance)
+
+            edges = viable_edges(pair_list, p_pairings, ground_distance, f_plaq, xwidth, yheight)
+
+            all_edges = edges
+            #all_edges = more_edges(f_plaq, edges, pair_list)
+            #print("\nedges:", all_edges)
+
+            matchings = plaq_groups(all_edges, f_plaq, ground_distance)
+            #print("\ngroups:", matchings)
+
+            string_groups = add_all_strings(matchings, lattice, coordList)
+
+            b_bonds = broken_bonds(string_groups, N, coordList, xwidth, yheight)
+
+            true_ground = make_config(b_bonds, Jij, N, xwidth, lattice, string_groups)
+
+            ground_config = true_ground[0]
+
+            true_ground_strings = true_ground[1]
+
+            number_ground_states = len(true_ground_strings)
+
+        if number_ground_states == 0:  #This means that we assumed a total string length that did not produce any actual ground states. The strategy to fix that is to add to the total string length until we find ground states.
+            found_ground = False
+            #inc = True
+
+            Jij = change_bc_x(Jij, N, xwidth, yheight)
+            #print(Jij)
+            Jij_type = 'ap'
+            true_ground = make_config(b_bonds, Jij, N, xwidth, lattice, string_groups)
+            ground_config = true_ground[0]
+            true_ground_strings = true_ground[1]
+            number_ground_states = len(true_ground_strings)
+
+
+        else:
+            found_ground = True    #This is the part where it works
+            #inc = False
+            #print("Ground distance for something that's working : ", ground_distance)
+
+        if number_ground_states == 0:
+            found_ground = False
+            Jij = change_bc_y(Jij, N, xwidth, yheight)
+            #print(Jij)
+            Jij_type = 'aa'
+            true_ground = make_config(b_bonds, Jij, N, xwidth, lattice, string_groups)
+            ground_config = true_ground[0]
+            true_ground_strings = true_ground[1]
+            number_ground_states = len(true_ground_strings)
+
+        else:
+            found_ground = True
+
+        if number_ground_states == 0:
+            found_ground = False
+            Jij = change_bc_x(Jij, N, xwidth, yheight)
+            #print(Jij)
+            Jij_type = 'pa'
+            true_ground = make_config(b_bonds, Jij, N, xwidth, lattice, string_groups)
+            ground_config = true_ground[0]
+            true_ground_strings = true_ground[1]
+            number_ground_states = len(true_ground_strings)
+
+        else:
+            found_ground = True
+
+        #Below is the piece that isn't working as well. It tends to return some correct ground states, but has not worked fully yet. You can check things with the tfim code, but it takes a while for that to return anything. I wouldn't use tfim for anything too far beyond a 4x4 system, or it takes too long.
+
+        # incremented = 0
+        #
+        # while found_ground == False:
+        #     incremented += 1
+        #     ground_distance += 1     #This adds to the total string distance that we are assuming will produce a ground state
+        #     print('dist:', ground_distance)
+        #     if ground_distance > 1000:
+        #         print('zoinks')
+        #         break   #Breaks out of the whole thing if the code has run too far
+        #
+        #     edges = viable_edges(pair_list, p_pairings, ground_distance, f_plaq, xwidth, yheight)
+        #
+        #     if len(edges) != 0:
+        #
+        #         #all_edges = more_edges(f_plaq, edges, pair_list)
+        #         all_edges = edges
+        #         print("\nedges:", all_edges)
+        #
+        #         matchings = plaq_groups(all_edges, f_plaq, ground_distance)
+        #
+        #         string_groups = add_all_strings(matchings, lattice, coordList)
+        #
+        #         b_bonds = broken_bonds(string_groups, N, coordList, xwidth, yheight)
+        #
+        #         true_ground = make_config(b_bonds, Jij, N, xwidth, lattice, string_groups)
+        #
+        #         ground_config = true_ground[0]
+        #
+        #         true_ground_strings = true_ground[1]
+        #
+        #         number_ground_states = len(true_ground_strings)
+        #
+        #         if number_ground_states != 0:  #If it finds ground states, we can break out of the while                             #loop
+        #             found_ground = True
+
+        #If you are running with the incremented states, you would change this so that incremented states can also get in (inc stands for incremented and means that we increased the initial minimum assumed string length)
+        if number_ground_states != 0:
+            if Jij_type == 'pp':
+                typecounts['pp'] += 1
+            if Jij_type == 'ap':
+                typecounts['ap'] += 1
+            if Jij_type == 'pa':
+                typecounts['pa'] += 1
+            if Jij_type == 'aa':
+                typecounts['aa'] += 1
+            print("boundary conditions: ", Jij_type)
+            ground_states.update({seed:ground_config})
+            ground_config = list(set(ground_config))
+            ground_config.sort()
+            print("Ground states: ", ground_config)
+
+            #This whole piece will check whether you are returning ground states that are correct by checking them against tfim. Again, don't run this bit if you are doing much beyond a 4x4 system or tfim takes forever
+            check_tfim = False
+            if check_tfim == True:
+                Jij2 = Jij_convert(Jij, N) #gives the Jij matrix in tfim's form
+                Energies = -1*tfim.JZZ_SK_ME(basis, Jij2)
+                number_ground = num_ground_states(Energies)[0]
+                states = num_ground_states(Energies)[1]
+                states.sort()
+                mod_states = convert_states(states, basis)
+                mod_states.sort()
+                print("From tfim:     ", mod_states)
+
+                if ground_config != mod_states:
+                    different.append(seed)
+                    print("Different!")   #Lets you know when this code isn't working
+
+
+
+    print("Different seeds: ", different)
+    print("Counts: ", typecounts)
+    f.write(json.dumps(ground_states))
+    f.close()
+    return ground_states, N, L
+
+
+
+def bond_list(seed, N, PBC, xwidth, yheight):
+    np.random.seed(seed)
+    # Generates a random list of bonds with equal numbers of ferromagnetic and antiferromagnetic bonds
+    if PBC == True:
+        num_of_bonds = 2*N
+    else:
+        num_of_bonds = (xwidth - 1)*(yheight) + (xwidth)*(yheight - 1)
+    if num_of_bonds%2 == 0:
+        a1 = [-1 for i in range(num_of_bonds//2)]
+    else:
+        a1 = [-1 for i in range((num_of_bonds//2) + 1)]
+    a2 = [1 for i in range(num_of_bonds//2)]
+    a = list(np.random.permutation(a1+a2))
+    return a
+
+def make_Jij(N, b_list, lattice):
+    #Goes through the list of bonds to make the jij matrix that tells you how all of the spins are bonded to each other
+    bond_index = 0
+    Jij = np.zeros((N,N))
+    for i in range(0,N):
+        NNs = lattice.NN(i)
+        for j in NNs:
+            if Jij[i][j] == 0:
+                Jij[i][j] = b_list[bond_index]
+                Jij[j][i] = b_list[bond_index]
+                bond_index += 1
+    return Jij
+
+def change_bc_x(Jij, N, xwidth, yheight):
+    spin = 0
+    while spin < N:
+        Jij[spin][spin + xwidth - 1] *= -1
+        Jij[spin + xwidth - 1][spin] *= -1
+        spin += xwidth
+
+    return Jij
+
+def change_bc_y(Jij, N, xwidth, yheight):
+    for spin in range(xwidth):
+        Jij[spin][spin + xwidth * (yheight-1)] *= -1
+        Jij[spin + xwidth * (yheight-1)][spin] *= -1
+
+    return Jij
+
+def make_plaquettes(PBC, lattice, N, xwidth, yheight):
+    #Makes a list of plaquettes; each entry is a list that contains the four spins that form the plaquettes, where the first spin listed is the plaquette "name"
+
+    p_list = []
+    if PBC:
+        for i in range(0, N):
+            NNs = lattice.NN(i)
+            plaq = [i]
+            plaq.append(NNs[3])
+            NNs2 = lattice.NN(NNs[3])
+            plaq.append(NNs2[1])
+            plaq.append(NNs[1])
+            p_list.append(plaq)
+    else:     #this whole statement doesn't matter unless you aren't using periodic boundary conditions
+        for y in range(0,yheight):
+            for x in range(0, xwidth):
+                if y == yheight-1 or x == xwidth-1: #This part adds empty plaquettes so the first number is also the index of each plaquette
+                    #if i want to take it out, just need to subtract 1 from x and y range
+                    p_list.append([])
+                else:
+                    plaq = []
+                    i = y*xwidth + x
+                    plaq.append(i)
+                    plaq.append(i+1)
+                    plaq.append(i+xwidth+1)
+                    plaq.append(i+xwidth)
+                    p_list.append(plaq)
+    return p_list
+
+def frustrated(Jij, plaqs):
+    #Makes a list of frustrated plaquettes by seeing how many antiferromagnetic bonds are in the plaquette (1 or 3 means frustrated)
+    #List is made of the first spin in each frustrated plaquette
+    f_plaq = []
+    for plaq in plaqs:
+        count = 0
+        if len(plaq)!=0:
+            if Jij[plaq[0]][plaq[1]] == -1:
+                count += 1
+            if Jij[plaq[1]][plaq[2]] == -1:
+                count += 1
+            if Jij[plaq[2]][plaq[3]] == -1:
+                count += 1
+            if Jij[plaq[0]][plaq[3]] == -1:
+                count += 1
+            if count == 1 or count == 3:
+                f_plaq.append(plaq[0])
+    #print("number of frustrated plaquettes: ", len(f_plaq))
+    return f_plaq
+
+def plaq_pairing(f_plaq, coordList, PBC, xwidth, yheight, spacing=1):
+    '''Function returns a list of all possible pairs between frustrated plaquettes with the distances between them–The distance is stored as the maximum possible distance between two plaquettes minus the actual distance'''
+    #Sort of confusing part here: To make things work in the initial_ground function, I am storing the distance between the plaquettes as sort of the opposite. If the maximum possible distance between two plaquettes is 4, and the plaquettes are right next to each other, the distance is stored as 3. If the plaquettes are 4 apart, the distance is stored as 1.
+    pair_list = []
+    for index, p1 in enumerate(f_plaq):
+        coord1 = coordList[p1]
+        for p2 in f_plaq[index+1:]:
+            coord2 = coordList[p2]
+            x1 = coord1[0] + spacing/2
+            x2 = coord2[0] + spacing/2
+
+            y1 = coord1[1] + spacing/2
+            y2 = coord2[1] + spacing/2
+
+            xdiff = abs((x1 - x2)/spacing)
+            ydiff = abs((y1 - y2)/spacing)
+            max = xwidth + yheight
+
+            if PBC:
+                edgeset = set()
+                edgeset.add(int(max - (xdiff + ydiff)))
+                edgeset.add(int(yheight - ydiff + xdiff))
+                edgeset.add(int(xwidth - xdiff + ydiff))
+                edgeset.add(int(xdiff + ydiff))
+
+            else:
+                if xdiff > (xwidth-1)//2:
+                    xdiff = (xwidth - 1) - xdiff
+                if ydiff > (yheight-1)//2:
+                    ydiff = (yheight) - ydiff
+            #Here we build a list of pairs with the distance between them
+            if p1 > p2:
+                for dist in edgeset:
+                    pair_list.append((p2, p1, dist))
+            else:
+                for dist in edgeset:
+                    pair_list.append((p1, p2, dist))
+    #print ("PAIR LIST", pair_list)
+    return pair_list
+
+def initial_ground(pair_list, xwidth, yheight):
+
+  G = nx.Graph()
+  G.add_weighted_edges_from(pair_list) #makes graph of all node pairs
+  matching = nx.max_weight_matching(G, maxcardinality=True) #gives one solution
+  #max_weight_matching is the reason the pair distance from the last function is a little confusing - this function matches things up to give the largest total distance between all plaquettes. Since we stored the distances sort of backwards, this will give us the minimum weight matching
+  ground_dist = 0
+  p_pairs = []
+  for pair in matching:
+      edge = G.get_edge_data(pair[0], pair[1])
+      pair_dist = (xwidth + yheight)-edge['weight']
+      ground_dist += pair_dist #total string length for a ground state soln
+      if pair[0] > pair[1]:
+          p0 = pair[1]
+          p1 = pair[0]
+          pair = (p0, p1)
+      p_pairs.append([pair, pair_dist]) #adds solution from above to list with pairs and pair distance
+  #print ("G DIST:", ground_dist)
+  return p_pairs, ground_dist #So this is the first pairing p_pairs that will lead to a ground state if the lowest distance between plaquettes is the correct energy
+  #ground_dist here tells us what we can expect the total string length to be for the rest of the ground states
+
+def viable_edges2(pair_list, f_plaq, xwidth, yheight):
+    edge_list = []
+
+def viable_edges(pair_list, p_pairs, ground_dist, f_plaq, xwidth, yheight):
+  '''Function takes the list of all possible pairings of nodes and returns a list of lists. Each list in it corresponds to one of the frustrated plaquettes and has all of the edges that could be used to make a ground state with that plaquette'''
+  #This uses the ground_dist returned in the last function
+  #If we did not find a ground state with the minimum ground distance, this will use an incremented ground distance
+
+  edge_list = []
+  plaq_dict = {}
+
+  #Make the list for the edges grouped by plaquette
+  for index, plaq in enumerate(f_plaq):
+      edge_list.append([])
+      plaq_dict[plaq] = index
+
+  G = nx.Graph()
+  G.add_weighted_edges_from(pair_list)  #creates a graph with edges between each pair in pair_list
+
+  #This bit just checks if p_pairs, the ground state that we found in the last function, has the ground_dist that we are looking for
+  #It will if we haven't incremented anything yet
+  first = False
+  p_dist = 0
+  for pair in p_pairs:
+      dist = pair[1]
+      p_dist += dist
+  if p_dist == ground_dist:
+      first = True #So we only remove certain edges if p_pairs is relevant
+
+
+  if first:   #if the initial ground distance for p_pairs is good, we add the edges from p_pairs to the list of viable edges
+      for pair1 in p_pairs:
+          plaq1 = pair1[0][0]
+          ind = plaq_dict.get(plaq1)
+          edge_list[ind].append(pair1)
+
+
+  loopnum = 0
+  for plaq2 in f_plaq:   #We start looping through each frustrated plaquette
+      #print("plaq:", plaq2)
+
+      G2 = G.copy()  #returns us to a full graph of pairs each time we loop through a plaquette
+      loopnum += 1
+
+      if first:
+          for pair2 in p_pairs:   #Remember p_pairs is the list of pairs in the ground state we found above
+              if pair2[0][0] == plaq2 or pair2[0][1] == plaq2:
+                  #print("Removing edge: ", pair2)
+                  G2.remove_edge(*pair2[0])  #Remove the edge in our graph that has already been added to edge_list above
+                  break
+
+      ground_energy = True
+      while ground_energy == True:
+                #This chunk builds the best ground state it can by using the edges in the graph called matching
+                #Once it builds the ground state, it removes the edge that contains the plaquette we are currently on, and then it makes another matching to see if any other ground states include that edge paired with a different plaquette
+
+
+          matching = nx.max_weight_matching(G2, maxcardinality=True) #make the best graph for the edges that we haven't yet removed
+          #print("matching:", matching)
+
+          if len(matching) != len(f_plaq)/2: #This would happen if we have taken out all edges for a particular plaquette
+              ground_energy = False
+              break  #takes us back to loop through edges for a new plaquette
+          new_length = 0
+          new_group = []
+          for pair3 in matching:  #takes each pair in the best matching and adds it to a group
+              edge = G2.get_edge_data(pair3[0], pair3[1])
+              if pair3[0] == plaq2 or pair3[1] == plaq2:
+                  rem_edge = (pair3[0], pair3[1])  #the edge that we are going to remove
+              pair_dist = (xwidth + yheight)-edge['weight']  #the actual distance
+              new_length += pair_dist
+              if pair3[0] > pair3[1]:  #This makes it so the first listed spin is the smaller one
+                  p0 = pair3[1]
+                  p1 = pair3[0]
+                  pair3 = (p0, p1)
+              new_group.append([pair3, pair_dist])
+
+          if new_length == ground_dist: #if we made a possible ground state from the matching
+
+              G2.remove_edge(*rem_edge)  #removes the edge with the current plaquette in it
+              #nx.draw(G2, with_labels=True)
+              #plt.show()
+
+              for pair4 in new_group:    #"new group" is a group of edges for the plaquette we are on
+                  plaq3 = pair4[0][0]
+                  ind1 = plaq_dict.get(plaq3)
+
+                  if pair4 not in edge_list[ind1]:
+                      edge_list[ind1].append(pair4)
+          elif new_length < ground_dist:   #This would only happen if you are incrementing the minimum ground distance, might be a spot where the code isn't doing what we want
+              G2.remove_edge(*rem_edge)
+              #nx.draw(G2, with_labels=True)
+              #plt.show()
+          else:
+              ground_energy = False   #This means that we have taken all possible ground states for that plaquette, and we need to move to the next one
+              ind1 = plaq_dict[plaq2]
+
+
+  zeroes = True
+  for plaq4 in edge_list:
+      if len(plaq4) != 0:
+          zeroes = False
+          break
+  if zeroes:
+      edge_list = []
+  #print('Edges: ', edge_list)
+  #print("here")
+  return edge_list
+
+def plaq_groups(edges, f_plaq, ground_dist):
+    '''This function returns all of the potential ground states at this point. Each state is made of pairs of plaquettes'''
+
+
+    group = []
+    used_plaquettes = []
+    all_groups = []
+    current_plaq = 0
+    p_ind = 0
+    index = 0
+    loop_count = 0
+
+    new = False
+    running = True
+
+    plaq_dict = {}
+    for index, plaq in enumerate(f_plaq): #Allows me to find the index of the frustrated plaquettes
+        plaq_dict[plaq] = index
+    #print(edges)
+
+    '''The main piece of the function'''
+
+    #This is only important if there are only two frustrated plaquettes
+    if len(f_plaq) == 2:
+        for i in edges[current_plaq:]:
+            for pair in i:
+                group.append(pair)
+        all_groups.append(group)
+        return all_groups
+
+
+    while running:
+        for group_index, p_edges in enumerate(edges[current_plaq:]):
+            #here we loop through each group of plaquettes from the current_plaq to the end
+            #p_edges contains each possible edge associated with the plaquette
+
+            #print("p_edges: ", p_edges)
+
+            if new:
+                new = False #new allows me to restart the for loop when i change current_plaq
+                break
+
+            if group_index + current_plaq == len(edges) - 1: #if we get to the last group of edges for the last possible plaquette without having a full ground state, we need to use a different combination of edges
+                try_new = False
+                for_loop = False
+                for e_ind, edge in enumerate(group[::-1]): #going through the ground state group backwards to see if other edge choices will work
+                    loop_count +=1
+                    if loop_count > 1000000:
+                        running = False
+                        new = True
+                    for_loop = True
+                    if try_new == True:
+                        break
+                    else:
+                        plaq_ind = plaq_dict.get(edge[0][0])
+                        for e_index, edge2 in enumerate(edges[plaq_ind]):
+                            if edge2 == edge:
+                                if e_index == len(edges[plaq_ind])-1 and plaq_ind == 0: #end of program, we've reached the last entry of the first plaquette
+                                    running = False
+                                    new = True
+                                    try_new = True
+                                    break
+                                elif e_index == len(edges[plaq_ind])-1: #Move to the previous plaquette list to find a viable edge
+                                    break
+                                else:
+                                    current_plaq = plaq_ind #move to the next edge in the list for the plaquette
+                                    p_ind = e_index + 1
+                                    try_new = True
+                                    new = True
+                                    break
+                if for_loop:
+                    group = group[:-e_ind]
+                    #print("Line 387 Current group: ", group)
+                    used_plaquettes = used_plaquettes[:-e_ind]#FACTOR OF 2 ADDED
+                    if len(group) == 1 and current_plaq == 0: #and group[0][0][0] == plaq_dict.get(current_plaq):
+                        #WHAT I CHANGED: current_plaq == 0 is new, i replaced that other and statement with it and it worked better? still missing one state
+                        group = []
+                        used_plaquettes = []
+
+
+            #The general part of the function when we are not at the end and do not yet have a full list of edges
+
+            for pair in p_edges[p_ind:]: #Here we are looping through each single edge from the edges associated with the current plaquette
+                #p_ind depends on which edges we get through below
+
+                p_ind = 0 #Resets p_ind for the next loop through
+
+                if (pair[0][0] in used_plaquettes):
+
+                    #current_plaq += 1 #new
+                    #new = True #new
+                    break #Can move to next plaquette because the first plaquette has already been used. This moves us back to the first for loop and a new group of edges for the next plaquette
+                #elif len(group) != 0 and pair[0][0] == group[-1][0][0]:
+                    #print("Line 404 yuh")
+                    #break
+                elif pair[0][1] in used_plaquettes:
+                    continue #Need to go through to the next pair to see if we can use this plaquette still
+                else:
+                    group.append(pair) #neither element has been used yet
+                    #print("Line 412 Current group: ", group)
+                    #if current_plaq == 0: #also new
+                    #used_plaquettes.append(pair[0][0]) #THIS IS NEW, Might not be a good idea
+
+                        #need to see how I am handling used-plaquettes to see if this is good
+
+                    used_plaquettes.append(pair[0][1])#maybe add the first element of pair if this is the first plaquette we visit
+
+                    if len(group) == len(f_plaq)//2: #Group is full
+                        #print('used: ', used_plaquettes)
+                        length = 0
+                        for pair in group:
+                            #print ("Pair: ", pair)
+                            length += pair[1]
+                        if length == ground_dist:
+                            all_groups.append(group) #once we have filled a group, we know it will be good so we can add it to all_groups
+                            #print('group added: ', group)
+
+                        last_pair = group[-2] #This is the pair that we remove and replace before cycling through other options
+                        #print('last pair: ', last_pair)
+                        ind = plaq_dict.get(last_pair[0][0]) #The plaquette index
+                        group = group[:-2]
+                        #print('group 432: ', group)
+                        used_plaquettes = used_plaquettes[:-2] #WAS AT -2
+                        #print ('after reducing used: ', used_plaquettes)
+                        found = False
+                        while found == False:
+                            loop_count += 1
+                            if loop_count > 1000000:
+                                running = False
+                                new = True
+                                found = True
+                                break
+                            for index, pairing in enumerate(edges[ind]):
+                                if pairing == last_pair and index == len(edges[ind])-1: #This happens if we are at the last pair of a particular plaquette
+                                    if len(group) == 0: #This happens if we have gotten through the last edge of the first plaquette, function is done
+                                        running = False
+                                        found = True
+                                        break
+                                    last_pair = group[-1] #Take off the last pair and go to that plaquette to see if there are further pairs to use
+                                    ind = plaq_dict.get(last_pair[0][0])
+                                    group = group[:-1]
+                                    #print('group 452', group)
+                                    used_plaquettes = used_plaquettes[:-1]#WAS AT -1
+                                elif pairing == last_pair: #This means there are more pairs for the plaquette in question, so we adjust current_plaq and p_ind, and go through the for loops again from there
+                                    current_plaq = ind
+                                    p_ind = index + 1
+                                    found = True
+                                    new = True
+                                    break
+                    break
+    #print('number of groups: ', len(all_groups))
+    #for i in range(0, len(all_groups)):
+        #print('group: ', all_groups[i])
+    return all_groups #This goes into the next function as 'groups'
+
+def add_all_strings(groups, lattice, coordList):
+    '''Takes all of the ground states from the last function, and sees if the plaquette pairs can form more than one string path between them'''
+    edges = []
+    for i in range(len(coordList)):
+        NNs = lattice.NN(i)
+        for j in NNs:
+            if i < j:
+                edges.append((i,j))
+    G = nx.Graph()
+    G.add_edges_from(edges) #G has edges connecting all points in a lattice with PBC
+
+    all_groups = []
+    index = 0
+    for group in groups:  #loops through each group of plaquette pairs
+
+        if index > 20000:
+            print('Not all ground states found')  #This is a safeguard against it running for too long
+            break
+
+        single_pairing = []
+        index += 1
+        for pairing in group:  #each plaquette pair in the group
+            paths = nx.all_shortest_paths(G, pairing[0][0], pairing[0][1]) #finds all possible paths between two points
+            paths_list = []
+            for path in paths:
+                paths_list.append(path)
+            single_pairing.append(paths_list)
+        path_combos = it.product(*single_pairing)
+        for combo in path_combos:
+            all_groups.append(combo)
+
+    return all_groups #This function returns potential ground states in the form of groups of paths that represent bonds that should be broken
+    '''When I say "path" I just mean the path that the string will take between two frustrated plaquettes. Each bond that the string goes through will be broked in the final state'''
+
+def broken_bonds(string_groups, N, coordList, xwidth, yheight):
+    '''Returns a list of NxN matrices. Each matrix corresponds to a potential ground state with 1's where there are broken bonds between two spins'''
+    config_Jij_list = []
+    for str_index, state in enumerate(string_groups):
+        config_Jij = np.zeros((N,N)) #makes a Jij matrix that will eventually give the locations of broken bonds
+        #print('state: ', state)
+        for string in state:       #string is a path between frustrated plaquettes
+            for index in range(0, len(string)-1):  #go through the whole string
+                p1 = string[index]        #p1 and p2 are the two plaquettes we are going between
+                p2 = string[index + 1]
+                if p1>p2:
+                    hold = p1
+                    p1 = p2
+                    p2 = hold
+                c1x = coordList[p1][0]
+                c2x = coordList[p2][0]
+                if c1x == c2x:     #there will be a vertical bond broken
+
+                    if p2 + xwidth > N - 1 and p1 < xwidth:
+                        sp1 = p1
+                        if (p1+1) % xwidth == 0:
+
+                            sp2 = p1 - xwidth + 1
+
+                        else:
+                            sp2 = p1 + 1
+
+                    else:
+
+                        sp1 = p2
+                        if (p1+1) % xwidth == 0: #on the far right
+                            sp2 = p2 - xwidth + 1
+                        else:
+                            sp2 = p2 + 1
+
+                else:
+                    if p2 + xwidth > N - 1: #Will be broken between a top and a bottom
+                        if (p2+1) % xwidth == 0:
+                            if p1 % xwidth == 0: #Then the plaquettes are on opposite sides
+                                sp1 = p1
+                            else:
+                                sp1 = p2
+                        else:
+                            sp1 = p2
+                        sp2 = sp1 - (xwidth * (yheight - 1))
+                    elif (p2+1) % xwidth == 0:
+
+                        if p1 % xwidth == 0:
+                            sp1 = p1
+                        else:
+                            sp1 = p2
+                        sp2 = sp1 + xwidth
+                    else:
+                        sp1 = p2
+                        sp2 = p2 + xwidth
+                bond = (sp1, sp2)
+
+                config_Jij[sp1][sp2] = 1
+                config_Jij[sp2][sp1] = 1
+        config_Jij_list.append([config_Jij, str_index])
+        #print('config_Jij: ', config_Jij)
+    return config_Jij_list  #a list of Jij matrices of broken bonds, the str_index says which path group it correponds to in string_groups from the function add_all_strings
+
+def make_config(b_bonds, bonds, N, xwidth, lattice, string_groups):
+    #This funciton will go through all of the potential ground states that we found and check to see if the bond configuration will allow those ground states to actually work
+    #Function is working
+    ground_states = []
+    true_strings = []
+    for Jij in b_bonds:
+        broken = Jij[0]
+        spin_list = []
+        spin_list.append(0) #Set the first spin as down
+        valid = True
+
+        #Loop through all other spins
+        for sp1 in range(1, N):
+            if valid == False:
+                break
+            if sp1 % xwidth == 0:
+                sp2 = sp1 - xwidth
+            else:
+                sp2 = sp1 - 1
+
+            spin2 = spin_list[sp2]
+            bond = bonds[sp1][sp2]
+            status = broken[sp1][sp2]
+            #print('status: ', status)
+
+            #Set spin
+            if bond == 1:
+                #Spins want to be the same
+                if status == 1: #broken
+                    spin1 = abs(spin2 - 1)
+                else:
+                    spin1 = spin2
+            else:
+                #Spins want to be opposite
+                if status == 1: #broken
+                    spin1 = spin2
+                else:
+                    spin1 = abs(spin2 - 1)
+            spin_list.append(spin1)
+
+            #Check bonds to all lower spins
+            NNs = lattice.NN(sp1)
+            for i in NNs:
+                if i < sp1:
+                    #print('spins: ', i, sp1)
+                    spini = spin_list[i]
+                    #print('spini: ', spini)
+                    #print('spin1: ', spin1)
+                    bond = bonds[sp1][i]
+                    status = broken[sp1][i]
+
+                    if bond == 1: #Spins want to be same
+                        if status == 1: #Spins should be opposite
+                            if spin1 == spini:
+                                valid = False
+                                #print("break 1")
+                                break
+                        else: #Spins should be same
+                            if spin1 != spini:
+                                valid = False
+                                #print("break 2")
+                                break
+                    else: #Spins want to be opposite
+                        if status == 1: #spins should be same
+                            if spini != spin1:
+                                valid = False
+                                #print("break 3")
+                                break
+                        else: #Spins should be opposite
+                            if spini == spin1:
+                                valid = False
+                                #print("break 4")
+                                break
+        if valid:
+            #print('accepted: ', string_groups[Jij[1]])
+            #print('b_bonds Jij: ', broken)
+            index = 0
+            for i in range(0, N):
+                if spin_list[i] == 1:
+                    index += 2**i
+            spin_list.reverse()
+            ground_states.append(index)
+            true_strings.append(string_groups[Jij[1]])
+
+
+    return ground_states, true_strings
+
+def spinCoords(center, xwidth, yheight, spacing=1):
+    coords = []
+    y_init = center[1] - ((yheight*spacing)/2)
+    for j in range(0, yheight):
+        y = y_init + (j*spacing)
+        x_init = center[0] - ((xwidth*spacing)/2)
+        for i in range(0, xwidth):
+            x = x_init + i*spacing
+            c = (x,y)
+            coords.append(c)
+    return coords
+
+"""Making the spin states from tfim to check against mine"""
+
+def Jij_convert(Jij, N):
+    new = np.zeros((N//2,N))
+    for j in range(0,N): #columns
+        count = 0
+        while count < N//2:
+            if j < N//2:
+                #make i at the index J be N-1
+                subtract = 1
+                for i in range(j, N//2):
+                    new[i][j] = Jij[j][N-subtract]
+                    subtract += 1
+                    count += 1
+                    if count == N//2:
+                        break
+            i = j
+            start = 0
+            while i > N//2:
+                i -= 1
+                start += 1
+            for q in range(0, N//2):
+                new[i-1][j] = Jij[j][q + start]
+                count += 1
+                i -= 1
+                if i <= 0:
+                    break
+    return new
+
+def num_ground_states(Energies):
+    sorted_indices = np.argsort(Energies)
+    sorted_energies = Energies[sorted_indices]
+
+    split_list = []
+    for key, group in groupby(sorted_energies):
+        split_list.append(list(group))
+
+    num_list = []
+    for x in range(0, len(split_list)):
+        index = 0
+        for y in range(0, x+1):
+            index = index + len(split_list[y])
+        start = (index - len(split_list[x]))
+        entry = sorted_indices[start:index]
+        entry.sort()
+        #entry = entry[:len(entry)/2]
+        num_list.append(entry)
+
+    ground_states = num_list[0]
+    ground = len(split_list[0])
+    return ground, ground_states
+
+def convert_states(states, basis):
+    g_states = []
+
+    for state in states:
+        binary = basis.state(state)
+        binary = binary[::-1]
+        if binary[-1] == 0:
+            index = basis.index(binary)
+            g_states.append(index)
+    return g_states
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

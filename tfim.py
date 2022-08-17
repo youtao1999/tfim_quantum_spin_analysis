@@ -85,8 +85,8 @@ class Lattice:
         self.D = len(L)             # spatial dimensionality
         self.N_links = ( self.D*self.N      # Number of nearest neighbor links
                         - int(not self.PBC)*( 1 if (self.D == 1)
-                            else int(not self.PBC)*(sum(L)) ) )
-
+                            else int(not self.PBC)*(sum(L)) ) )                       
+    
     def NN(self, i):
         """Returns a list of nearest neighbors of site i"""
         if self.D == 1:
@@ -100,7 +100,6 @@ class Lattice:
                 is_left = True
                 left_NN = i - 1
 
-
         else:
             height = self.L[0]
             width = self.L[1]
@@ -113,18 +112,18 @@ class Lattice:
                 NNS.append(above)
             else:
                 if self.PBC == True:
-                    NNS.append(i + (height - 1) * width)
+                    NNS.append(i + (height-1)*width)
             if i < self.N - width:
                 NNS.append(below)
             else:
                 if self.PBC == True:
-                    NNS.append(i - (height - 1) * width)
+                    NNS.append(i - (height-1)*width)
             if i % width != 0:
                 NNS.append(left)
             else:
                 if self.PBC == True:
                     NNS.append(i + width - 1)
-            if (i + 1) % width != 0:
+            if (i+1) % width != 0:
                 NNS.append(right)
             else:
                 if self.PBC == True:
@@ -247,19 +246,18 @@ def JZZ_SK_ME(basis,J):
     """ Computes matrix elements for the SK interactions
         and returns each as a 1D np.array
         --JZZ = \sum_{i,j} J_{ij}\sigma^z_i \sigma^z_j"""
-    
     JZZ = np.zeros(basis.M)
-    bar = progressbar.ProgressBar()
     shift_state = np.zeros(basis.N,dtype=int)
-    for b in bar(range(basis.M)):
+    for b in range(basis.M):
         state = basis.spin_state(b)
-        for shift in range(1,int(basis.N/2+1)): # added int() from python 2 to python 3
+        for shift in range(1,basis.N//2+1):
             shift_state[shift:] = state[:-shift]
             shift_state[:shift] = state[-shift:]
-            if (basis.N%2 == 0) and (shift == basis.N/2):
+            if (basis.N%2 == 0) and (shift == basis.N//2):
                 JZZ[b] = JZZ[b] + 0.5*np.dot(J[shift-1,:]*shift_state,state)
             else:
-                JZZ[b] = JZZ[b] + np.dot(J[shift-1,:]*shift_state,state)    
+                JZZ[b] = JZZ[b] + np.dot(J[shift-1,:]*shift_state,state)
+
     return JZZ
 
 ###############################################################################
@@ -271,11 +269,9 @@ def JZZ_SK(basis,J):
     I = np.arange(basis.M)
     return sparse.coo_matrix((JZZ_ME,(I,I)),shape=(basis.M,basis.M))
 
-    
 ###############################################################################
-def Jij_instance(N,J,dist="normal",seed=0,even=True):
+def Jij_instance(N,J,dist,seed,even):
     """Generates an random instance of couplings"""
-    """(Bimodal code from Asher Lantz's fork)"""
 
     np.random.seed(seed)
 
@@ -304,7 +300,7 @@ def Jij_instance(N,J,dist="normal",seed=0,even=True):
         if N%2 == 0:
             Jij[-1,N//2:] = Jij[-1,:N//2]
 
-    return Jij    
+    return Jij
 
 ###############################################################################
 def z_magnetizations_ME(lattice,basis):
@@ -352,7 +348,9 @@ def load_diag_ME(filename_base):
     """Loads matrix elements for diagonal tfim matricies from text file
         --returns scipy.sparse.coo_matrices"""
     
+
     ME_filename = filename_base + diag_ME_suffix
+
     print( '\tLoading diagonal matrices from ' + ME_filename)
     parameters, columns = parse_header(ME_filename)
     ME = np.loadtxt(ME_filename)
@@ -377,6 +375,12 @@ def load_diag_ME(filename_base):
     ZZ_mat = sparse.coo_matrix((ZZ_ME,(I,I)),shape=(M,M))
     Mz_mat = sparse.coo_matrix((Mz_ME,(I,I)),shape=(M,M))
     Ms_mat = sparse.coo_matrix((Ms_ME,(I,I)),shape=(M,M))
+
+    print(parameters)
+    print(JZZ_mat)
+    print(ZZ_mat)
+    print(Mz_mat)
+    print(Ms_mat)
     
     return parameters, JZZ_mat, ZZ_mat, Mz_mat, Ms_mat
 

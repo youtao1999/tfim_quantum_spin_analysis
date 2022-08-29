@@ -1,5 +1,5 @@
 import networkx as nx
-from NN_ground import main
+from NN_ground import fast_GS
 import tfim_perturbation as perturbation
 import tfim_matrices
 import tfim_EE
@@ -39,7 +39,7 @@ def fast_entropy(h_x_range, num_iter, size_list):
         J = 1
         args = [str(size[0]), str(size[1]), str(num_iter)]
         # calculate ground states, store in dictionary
-        ground_states_dict, N, L, Jij_list, basis = main(args)
+        ground_states_dict, N, L, Jij_list, basis = fast_GS(args)
         partition_set = tfim_EE.linear_bipartition(L)
         entropy_par_arr = np.zeros((len(partition_set), num_iter))
         for j, key in enumerate(ground_states_dict.keys()):
@@ -108,7 +108,6 @@ def fast_entropy(h_x_range, num_iter, size_list):
                         'for seed: {seed_num} the GS manifold still has {num_disconnected_components} disconnected components at 4th order'.format(
                             seed_num=key, num_disconnected_components=num_components))
     return degeneracy_hist_data, order_hist_data, entropy_hist_data
-
 
 def data_store(output, file_name, data):
     # store data

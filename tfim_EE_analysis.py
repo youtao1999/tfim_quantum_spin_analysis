@@ -31,9 +31,9 @@ def main():
 
     parser = argparse.ArgumentParser(description=(
         "Use a rapid-GS-generating algorithm combined with fourth order perturbation theory to calculate the entanglement entropy with respect to the transverse field strength"))
-    parser.add_argument('x', help=("width of the system"))
-    parser.add_argument('y', help=("height of the system"))
-    parser.add_argument('num_iter', help=("Number of J_ij instances to sample"))
+    parser.add_argument('x', type = int, help=("width of the system"))
+    parser.add_argument('y', type = int, help=("height of the system"))
+    parser.add_argument('num_iter', type = int, help=("Number of J_ij instances to sample"))
     parser.add_argument('-PBC', type=bool, default=True, help="Specifying PBC")
     parser.add_argument('-J', type=float, default=1.0, help='Nearest neighbor Ising coupling')
     parser.add_argument('--h_min', type=float, default=0.0,
@@ -52,25 +52,20 @@ def main():
     h_x_range = np.linspace(args.h_min, args.h_max, args.num_h)
     J = args.J
     check_tfim_EE = args.check
-    arguments = [args.x, args.y, num_iter]
-
-    # calculate ground states, store in dictionary
-    ground_states_dict, N, L, Jij_list, basis = fast_GS(arguments)
-
-    # Now that we have obtained the ground states, we calculate the minimum order needed in perturbation theory
+    seed_range = [np.random.randint(1, 1e3) for i in range(num_iter)]
     # Here we specify the partition
-    A, B = tfim_EE.vertical_bipartition(L)
+    A, B = tfim_EE.vertical_bipartition([args.x, args.y])
     # enter output directory
     if os.path.isdir(args.d):
         shutil.rmtree(args.d)
     os.mkdir(args.d)
     os.chdir(args.d)
 
-    for key in ground_states_dict.keys():
+    for seed in seed_range:
         # make sure that GS_indices consists of only integers
-        GS_indices = [int(index) for index in ground_states_dict[key]]
-        Jij = Jij_list[key]
+        GS_indices, Jij, basis, typecounts, Jij_type = fast_GS(args.x, args.y, seed, check_tfim=check_tfim_EE)
         GS_energy = perturbation.state_energy(basis, Jij, int(GS_indices[0]))
+        N = args.x * args.y
 
         #####################################################################################
         # check to see if we have zero energy gap denominator problem
@@ -79,13 +74,13 @@ def main():
         #####################################################################################
 
         if tfim_EE.energy_denominator_check(basis, Jij, GS_indices, GS_energy, N) > 0:
-            print('seed: ', key, 'num_GS: ', len(GS_indices), 'num_vanishing_energy_gaps: ', len(num_vanishing_energy_gaps), 'GS_energy: ', GS_energy)
+            print('seed: ', seed, 'num_GS: ', len(GS_indices), 'num_vanishing_energy_gaps: ', len(num_vanishing_energy_gaps), 'GS_energy: ', GS_energy)
             pass
         else: # if none of the energy gaps suffers the zero denominator problem
             adj_matrix, H_0, H_app_1, H_app_2, H_app_3, H_app_4 = perturbation.matrix_terms(GS_indices, GS_energy, N, basis, Jij)
             matrix_terms = [H_0, H_app_1, H_app_2, H_app_3, H_app_4]
             # store the Hamiltonian in txt file
-            tfim_EE.H_latex_pdf_generator(H_0, H_app_1, H_app_2, H_app_3, H_app_4, key)
+            tfim_EE.H_latex_pdf_generator(H_0, H_app_1, H_app_2, H_app_3, H_app_4, seed)
             # check if the ground manifold is splitting into more than two disconnected components
             G = nx.from_numpy_matrix(adj_matrix)
             num_components = nx.number_connected_components(G)
@@ -99,44 +94,40 @@ def main():
                     # Calculate exact eigenvalues and eigenstates for range(h_x)
                     exc_eigenvalues, exc_eigenstates = perturbation.exc_eigensystem(basis, h_x_range, N, Energies, lanczos = True, ground_projection = False, reordering = False)
                     # compare lanczos and perturbation theory in energy
-                    tfim_EE.ground_energy_comparison_plot(GS_indices, h_x_range, app_eigenvalues, exc_eigenvalues, key,
+                    tfim_EE.ground_energy_comparison_plot(GS_indices, h_x_range, app_eigenvalues, exc_eigenvalues, seed,
                                                   num_components)
-                    outF = open("seed_{seed_num},degeneracy_{degeneracy_num}.txt".format(seed_num=key,degeneracy_num=len(GS_indices)),'w')
+                    outF = open("seed_{seed_num},degeneracy_{degeneracy_num}.txt".format(seed_num=seed,degeneracy_num=len(GS_indices)),'w')
                     perturb_entropy_arr, exc_entropy_arr = tfim_EE.entropy_analysis(basis, exc_eigenstates, exc_eigenvalues, GS_indices, A, B, app_eigenstates,
-                                             h_x_range, key)
+                                             h_x_range, seed)
                     for i in range(len(h_x_range)):
                         outF.write("{index} {h_x_val} {entropy_val_exc} {entropy_val_app} \n".format(index=i, h_x_val=h_x_range[i], entropy_val_exc = exc_entropy_arr[i],
                                                                                entropy_val_app=perturb_entropy_arr[i]))
-                    print('seed: ', key, 'completed')
                     outF.close()
                 else:
                     # get rid of the constant in energy and extra dependencies on hx
                     exponent = 2
                     if H_app_1.any():
                         exponent = 1
-                    E_0_arr = np.ones(len(h_x_range)) * GS_energy
-                    for i in range(len(app_eigenvalues_connected[0])):
-                        app_eigenvalues_connected[:, i] = (app_eigenvalues_connected[:, i] - E_0_arr)/h_x_range**exponent
+                    # E_0_arr = np.ones(len(h_x_range)) * GS_energy
+                    # for i in range(len(app_eigenvalues_connected[0])):
+                    #     app_eigenvalues_connected[:, i] = (app_eigenvalues_connected[:, i] - E_0_arr)/np.power(h_x_range, exponent)
 
-                    outF = open("seed_{seed_num},degeneracy_{degeneracy_num}.txt".format(seed_num=key, degeneracy_num=len(GS_indices)), 'w')
+                    outF = open("seed_{seed_num},degeneracy_{degeneracy_num}.txt".format(seed_num=seed, degeneracy_num=len(GS_indices)), 'w')
                     perturb_entropy_arr = np.zeros(len(h_x_range))
                     for i in range(len(h_x_range)):
                         perturb_entropy_arr[i] = tfim_EE.perturb_entropy(basis, GS_indices, A, B, app_eigenstates, i)
                         outF.write("{index} {h_x_val} {entropy_val} \n".format(index=i, h_x_val=h_x_range[i], entropy_val=perturb_entropy_arr[i]))
-
-                        # change the Hamilonian that we are diagonalizing
-                        # store all the Hamiltonian, in particular for seed 883
-
                     (plateaus, dF, d2F) = tfim_EE.find_plateaus(perturb_entropy_arr, h_x_range[1]-h_x_range[0], min_length=10, tolerance=0.005, smoothing=10)
-                    print(plateaus)
+                    # print(plateaus)
                     if len(plateaus) != 0.:
-                        print(perturb_entropy_arr[plateaus.flatten()[0]: plateaus.flatten()[1]])
+                        # print(perturb_entropy_arr[plateaus.flatten()[0]: plateaus.flatten()[1]])
+                        print(seed, perturb_entropy_arr[plateaus.flatten()[0]])
                     outF.close()
                     # energy & entropy plot
-                    tfim_EE.energy_plot(GS_indices, h_x_range, app_eigenvalues_connected, key, num_components, exponent)
-                    tfim_EE.entropy_plot(GS_indices, h_x_range, perturb_entropy_arr, key, num_components, exponent)
+                    tfim_EE.energy_plot(GS_indices, h_x_range, app_eigenvalues_connected, seed, num_components, exponent)
+                    tfim_EE.entropy_plot(GS_indices, h_x_range, perturb_entropy_arr, seed, num_components, exponent)
             else:
-                print('for seed: {seed_num} the GS manifold still has {num_disconnected_components} disconnected components at 4th order'.format(seed_num = key, num_disconnected_components = num_components))
+                print('for seed: {seed_num} the GS manifold still has {num_disconnected_components} disconnected components at 4th order'.format(seed_num = seed, num_disconnected_components = num_components))
     os.chdir('../')
 
 if __name__ == "__main__":

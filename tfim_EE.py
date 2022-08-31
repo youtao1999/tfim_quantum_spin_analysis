@@ -354,7 +354,6 @@ def entropy_plot(GS_indices, h_x_range, perturb_entropy_arr, seed, num_component
     title = "entropy_seed: {seed_num}, \n degeneracy: {degeneracy_num} num_components: {num_comp}, first_nontrivial_order: {first_nontrivial_order}".format(seed_num=seed,
                                                                                degeneracy_num=len(GS_indices), num_comp = num_components, first_nontrivial_order = exponent)
     pl.title(title)
-    print('seed: ', seed, 'completed')
     pl.ioff()
     pl.savefig("entropy_seed_" + str(seed) + " degeneracy_" + str(len(GS_indices)), bbox_inches='tight')
 

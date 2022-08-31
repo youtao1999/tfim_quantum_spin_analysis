@@ -1,13 +1,10 @@
 import networkx as nx
 from NN_ground import fast_GS
 import tfim_perturbation as perturbation
-import tfim_matrices
 import tfim_EE
 import numpy as np
-import tfim
 import matplotlib.pyplot as pl
 import os
-import shutil
 
 def order(basis, GS_indices):
     weighted_adj_matrix = perturbation.Hamming_array(GS_indices, basis)
@@ -37,50 +34,24 @@ def fast_entropy(h_x_range, num_iter, size_list):
 
     for i, size in enumerate(size_list):
         J = 1
-        args = [str(size[0]), str(size[1]), str(num_iter)]
         # calculate ground states, store in dictionary
-        ground_states_dict, N, L, Jij_list, basis = fast_GS(args)
-        partition_set = tfim_EE.linear_bipartition(L)
-        entropy_par_arr = np.zeros((len(partition_set), num_iter))
-        for j, key in enumerate(ground_states_dict.keys()):
+        seed_range = [np.random.randint(1, 1e3) for i in range(num_iter)]
+        for j, seed in enumerate(seed_range):
             # make sure that GS_indices consists of only integers
-            GS_indices = [int(index) for index in ground_states_dict[key]]
-            Jij = Jij_list[key]
+            GS_indices, Jij, basis, typecounts, Jij_type = fast_GS(size[0], size[1], seed)
+            N = size[0] * size[1]
+            partition_set = tfim_EE.linear_bipartition(size)
+            entropy_par_arr = np.zeros((len(partition_set), num_iter))
             degeneracy_hist_data[j, i] = len(GS_indices)
             order_hist_data[j, i] = order(basis, GS_indices)
 
             # Building blocks matrices
-            ES_1_indices = tfim_matrices.Hamming_set(basis, GS_indices, N, GS_indices)
-            ES_2_indices = tfim_matrices.Hamming_set(basis, ES_1_indices, N, GS_indices)
-
             GS_energy = perturbation.state_energy(basis, Jij, int(GS_indices[0]))
-            ES_1_indices = []
-            for l, GS_index in enumerate(GS_indices):
-                state = basis.state(GS_index)
-                for m in range(N):
-                    basis.flip(state, m)
-                    flipped_state_index = basis.index(state)
-                    if flipped_state_index not in GS_indices:
-                        ES_1_indices.append(flipped_state_index)
-            ES_1_indices = np.unique(sorted(ES_1_indices))
-
-            ES_2_indices = []
-            for l, index in enumerate(ES_1_indices):
-                state = basis.state(index)
-                for m in range(N):
-                    basis.flip(state, m)
-                    flipped_state_index = basis.index(state)
-                    if flipped_state_index not in GS_indices:
-                        ES_2_indices.append(flipped_state_index)
-            ES_2_indices = np.unique(sorted(ES_2_indices))
-
-            # energy_gap_matrix_12 (EGM) denotes 1/(E_0-QH_0Q)^2 from Q1 to Q1
-            EGM_11 = tfim_matrices.energy_gap(basis, Jij, ES_1_indices, N, GS_energy, 1)
             # check to see if we have zero energy gap denominator problem
             # function returns false if the problem exists
             num_vanishing_energy_gaps = tfim_EE.energy_denominator_check(basis, Jij, GS_indices, GS_energy, N)
             if num_vanishing_energy_gaps > 0:
-                print('seed: ', key, 'num_GS: ', len(GS_indices), 'num_vanishing_energy_gaps: ',
+                print('seed: ', seed, 'num_GS: ', len(GS_indices), 'num_vanishing_energy_gaps: ',
                       len(num_vanishing_energy_gaps), 'GS_energy: ', GS_energy)
                 pass
 
@@ -106,7 +77,7 @@ def fast_entropy(h_x_range, num_iter, size_list):
                 else:
                     print(
                         'for seed: {seed_num} the GS manifold still has {num_disconnected_components} disconnected components at 4th order'.format(
-                            seed_num=key, num_disconnected_components=num_components))
+                            seed_num=seed, num_disconnected_components=num_components))
     return degeneracy_hist_data, order_hist_data, entropy_hist_data
 
 def data_store(output, file_name, data):

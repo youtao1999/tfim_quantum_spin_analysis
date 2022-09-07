@@ -4,7 +4,7 @@
 # Set SLURM options
 #SBATCH --job-name=tfim_EE_analysis                # Job name
 #SBATCH --output=tfim_EE_analysis-%A-%a.out        # Standard output and error log
-#SBATCH --mail-user=username@middlebury.edu     # Where to send mail
+#SBATCH --mail-user=tyou@middlebury.edu     # Where to send mail
 #SBATCH --mail-type=NONE                        # Mail events (NONE, BEGIN, END, FAIL, ALL)
 #SBATCH --cpus-per-task=1                       # Run each array job on a single core
 #SBATCH --mem=2gb                               # Job memory request
@@ -19,6 +19,8 @@ echo "Node: ${SLURMD_NODENAME}"
 echo "Starting: "`date +"%D %T"`
 
 # Your calculations here
-python tfim_EE_analysis.py 3 3 10
+python tfim_EE_analysis.py 3 3 10 > EE-${SLURM_ARRAY_TASK_ID}.dat
+cat EE-* > EE.dat
+rm EE-*
 
 # End of job info
